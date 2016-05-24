@@ -1,0 +1,21 @@
+[package]
+name = "ts3tts"
+version = "0.2.0"
+authors = ["Flakebi <flakebi@t-online.de>"]
+description = "TeamSpeak3 Text to Speech Plugin"
+repository = "https://github.com/Flakebi/ts3tts"
+readme = "README.md"
+license = "GPL-2.0"
+
+[lib]
+name = "ts3tts"
+crate-type = ["dylib"]
+
+[profile.release]
+lto = true
+
+[dependencies]
+lazy_static = "*"
+
+[dependencies.ts3plugin]
+git = "https://github.com/Flakebi/rust-ts3plugin"
