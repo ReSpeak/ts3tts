@@ -258,7 +258,7 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn connection_moved(&mut self, api: &mut TsApi, server_id: ServerId,
+    fn connection_move(&mut self, api: &mut TsApi, server_id: ServerId,
         connection_id: ConnectionId, old_channel_id: ChannelId,
         new_channel_id: ChannelId, visibility: Visibility) {
         if let Some(server) = api.get_server(server_id) {
@@ -282,6 +282,41 @@ impl Plugin for TTSPlugin {
                     Some(channel_id) if channel_id == old_channel_id => self.tts(format!("{} left to {}{}", connection, new_channel, vis)),
                     Some(channel_id) if channel_id == new_channel_id => self.tts(format!("{} joined{}", connection, vis)),
                     _ => self.tts(format!("{} switched to {}{}", connection, new_channel, vis)),
+                }
+            }
+        }
+    }
+
+    fn connection_moved(&mut self, api: &mut TsApi, server_id: ServerId,
+        connection_id: ConnectionId, old_channel_id: ChannelId,
+        new_channel_id: ChannelId, visibility: Visibility, invoker: Invoker) {
+        if let Some(server) = api.get_server(server_id) {
+            let connection = get_connection_name(server, connection_id);
+            let new_channel = get_channel_name(server, new_channel_id);
+            let invoker_name = get_invoker_name(server, &invoker);
+            // Check if we are the client
+            if connection_id == server.get_own_connection_id() {
+                self.tts(format!("{} moved you to {}", invoker_name, new_channel));
+            } else {
+                // Check if the client joined our own channel
+                let own_channel_id = server.get_connection(server.get_own_connection_id())
+                    .map(|c| c.get_channel_id());
+                // Inform about changed visibility
+                let vis = match visibility {
+                    Visibility::Enter => " and appeared",
+                    Visibility::Leave => " and disappeared",
+                    _ => "",
+                };
+
+                match own_channel_id {
+                    Some(channel_id) if channel_id == old_channel_id =>
+                        self.tts(format!("{} moved {} out to {}{}", invoker_name,
+                            connection, new_channel, vis)),
+                    Some(channel_id) if channel_id == new_channel_id =>
+                        self.tts(format!("{} moved {} in{}", invoker_name,
+                            connection, vis)),
+                    _ => self.tts(format!("{} moved {} to {}{}", invoker_name,
+                        connection, new_channel, vis)),
                 }
             }
         }
@@ -410,16 +445,16 @@ impl Plugin for TTSPlugin {
     fn connection_server_group_added(&mut self, api: &mut TsApi, server_id: ServerId,
         connection: Invoker, _: ServerGroupId, invoker: Invoker) {
         if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} added {} to a group", get_invoker_name(server, &connection),
-                get_invoker_name(server, &invoker)));
+            self.tts(format!("{} added {} to a group", get_invoker_name(server, &invoker),
+                get_invoker_name(server, &connection)));
         }
     }
 
     fn connection_server_group_removed(&mut self, api: &mut TsApi, server_id: ServerId,
         connection: Invoker, _: ServerGroupId, invoker: Invoker) {
         if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} removed {} from a group", get_invoker_name(server, &connection),
-                get_invoker_name(server, &invoker)));
+            self.tts(format!("{} removed {} from a group", get_invoker_name(server, &invoker),
+                get_invoker_name(server, &connection)));
         }
     }
 
