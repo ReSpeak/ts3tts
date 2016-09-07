@@ -22,6 +22,18 @@ use ts3plugin::*;
 /// Maximum number of texts read in parallel.
 const MAX_TTS_PROCESSES: usize = 5;
 
+/// A macro that compares to `Result` values.
+/// It returns `true` if they are both ok and unequal,
+/// otherwise `false` will be returned.
+macro_rules! values_neq {
+    ($a: expr, $b: expr) => {{
+        // Evaluate the expressions only once
+        let a = $a;
+        let b = $b;
+        a.is_ok() && b.is_ok() && a != b
+    }};
+}
+
 struct TTSPlugin {
     /// The running threads. Before the plugin is ended, they have to be finished.
     /// The saved number is used for identifying threads because threads can't
@@ -30,34 +42,30 @@ struct TTSPlugin {
 }
 
 /// Get the name or phonetic name of a server.
-fn get_server_name(server: &Server) -> &String {
-    let phonetic_name = server.get_phonetic_name();
-    if phonetic_name.is_empty() {
-        server.get_name()
-    } else {
-        phonetic_name
-    }
+fn get_server_name(server: &Server) -> &str {
+    server.get_phonetic_name().ok()
+        .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) })
+        .or_else(|| server.get_name().ok().map(|s| s.as_str()))
+        .unwrap_or("unknown server")
 }
 
 /// Get the name or phonetic name of a channel.
 fn get_channel_name<'a>(server: &'a Server, channel_id: ChannelId) -> &'a str {
-    server.get_channel(channel_id).map_or("unknown channel", |channel| {
-        let phonetic_name = channel.get_phonetic_name();
-        if phonetic_name.is_empty() {
-            channel.get_name()
-        } else {
-            phonetic_name
-        }
-    }.as_str())
+    server.get_channel(channel_id)
+        .and_then(|c| c.get_phonetic_name().ok()
+            .and_then(|s| if s.is_empty() { None } else { Some(s) })
+            .or_else(|| c.get_name().ok()))
+        .map(|s| s.as_str())
+        .unwrap_or("unknown channel")
 }
 
 fn intern_get_connection_name(connection: &Connection) -> &str {
-    let phonetic_name = connection.get_phonetic_name();
-    if phonetic_name.is_empty() {
-        connection.get_name().as_str()
-    } else {
-        phonetic_name.as_str()
-    }//.split(' ').next().unwrap() // Take name until the first space
+    let result = connection.get_phonetic_name().ok()
+        .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) })
+        .or_else(|| connection.get_name().ok().map(|s| s.as_str()))
+        .unwrap_or("unknown");
+    // Take name until the first space
+    result.find(' ').map_or(result, |i| result.split_at(i).0)
 }
 
 /// Get the name or phonetic name of a connection.
@@ -70,11 +78,13 @@ fn get_connection_name<'a>(server: &'a Server, connection_id: ConnectionId) -> &
 /// THis uses the connection name if a connection is available. If not, it uses
 /// the provided invoker name.
 fn get_invoker_name<'a>(server: &'a Server, invoker: &'a Invoker) -> &'a str {
-    if server.get_connection(invoker.get_id()).is_some() {
-        get_connection_name(server, invoker.get_id())
-    } else {
-        invoker.get_name().as_str()//.split(' ').next().unwrap() // Take name until the first space
-    }
+    let result = if server.get_connection(invoker.get_id()).is_some() {
+            get_connection_name(server, invoker.get_id())
+        } else {
+            invoker.get_name().as_str()
+        };
+    // Take name until the first space
+    result.find(' ').map_or(result, |i| result.split_at(i).0)
 }
 
 impl TTSPlugin {
@@ -123,7 +133,7 @@ impl TTSPlugin {
 }
 
 impl Plugin for TTSPlugin {
-    fn new(api: &TsApi) -> Result<Box<TTSPlugin>, InitError> {
+    fn new(api: &mut TsApi) -> Result<Box<TTSPlugin>, InitError> {
         api.log_or_print("Starting", "TTSPlugin", LogLevel::Info);
         Ok(Box::new(TTSPlugin {
             tts_threads: Arc::new(Mutex::new((Vec::new(), 0))),
@@ -148,7 +158,7 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn server_error(&mut self, api: &TsApi, _: ServerId, error: Error,
+    fn server_error(&mut self, api: &mut TsApi, _: ServerId, error: Error,
         message: String, _: String, extra_message: String) -> bool {
         api.log_or_print(format!("A server error occured: {} ({:?}; {})", message,
             error, extra_message), "TTSPlugin", LogLevel::Error);
@@ -170,61 +180,72 @@ impl Plugin for TTSPlugin {
                 if let Some(new) = server.get_connection(connection_id) {
                     let name = get_connection_name(server, connection_id);
 
-                    if new.get_name() != old.get_name() {
+                    if values_neq!(new.get_name(), old.get_name()) {
                         // Don't use the phonetic name here
-                        self.tts(format!("{} is now known as {}", intern_get_connection_name(&old), new.get_name()));
+                        self.tts(format!("{} is now known as {}",
+                            intern_get_connection_name(&old),
+                            new.get_name().map(|s| s.as_str()).unwrap_or("unknown")));
                     }
-                    if new.get_away() != old.get_away() {
-                        if new.get_away() == AwayStatus::Zzz {
-                            self.tts(format!("{} has gone{}", name, if new.get_away_message().is_empty() {
-                                String::new() } else { format!(" to {}", new.get_away_message()) }));
+                    if values_neq!(new.get_away(), old.get_away()) {
+                        if new.get_away().unwrap() == AwayStatus::Zzz {
+                            self.tts(format!("{} has gone{}", name,
+                                new.get_away_message().ok().and_then(|s| if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(format!(" to {}", s))
+                                }).unwrap_or(String::new())));
                         } else {
                             self.tts(format!("{} is back", name));
                         }
-                    } else if new.get_away() == AwayStatus::Zzz && new.get_away_message() != old.get_away_message() {
-                        self.tts(format!("{} has gone{}", name, if new.get_away_message().is_empty() {
-                            String::new() } else { format!(" to {}", new.get_away_message()) }));
+                    } else if new.get_away().map(|a| a == AwayStatus::Zzz).unwrap_or(false)
+                        && values_neq!(new.get_away_message(), old.get_away_message()) {
+                        self.tts(format!("{} has gone{}", name,
+                            new.get_away_message().ok().and_then(|s| if s.is_empty() {
+                                None
+                            } else {
+                                Some(format!(" to {}", s))
+                            }).unwrap_or(String::new())));
                     }
-                    if new.get_input_muted() != old.get_input_muted() {
-                        if new.get_input_muted() == MuteInputStatus::Muted {
+                    if values_neq!(new.get_input_muted(), old.get_input_muted()) {
+                        if new.get_input_muted().unwrap() == MuteInputStatus::Muted {
                             self.tts(format!("{} is muted", name));
                         } else {
                             self.tts(format!("{} is unmuted", name));
                         }
                     }
-                    if new.get_output_muted() != old.get_output_muted() {
-                        if new.get_output_muted() == MuteOutputStatus::Muted {
+                    if values_neq!(new.get_output_muted(), old.get_output_muted()) {
+                        if new.get_output_muted().unwrap() == MuteOutputStatus::Muted {
                             self.tts(format!("{} is deaf", name));
                         } else {
                             self.tts(format!("{} is listening", name));
                         }
                     }
-                    if new.get_output_only_muted() != old.get_output_only_muted() {
-                        if new.get_output_only_muted() == MuteOutputStatus::Muted {
+                    if values_neq!(new.get_output_only_muted(), old.get_output_only_muted()) {
+                        if new.get_output_only_muted().unwrap() == MuteOutputStatus::Muted {
                             self.tts(format!("{} is only deaf", name));
                         } else {
                             self.tts(format!("{} is listening again", name));
                         }
                     }
-                    if new.get_input_hardware() != old.get_input_hardware() {
-                        if new.get_input_hardware() == HardwareInputStatus::Disabled {
+                    if values_neq!(new.get_input_hardware(), old.get_input_hardware()) {
+                        if new.get_input_hardware().unwrap() == HardwareInputStatus::Disabled {
                             self.tts(format!("{} is silent", name));
                         } else {
                             self.tts(format!("{} can talk", name));
                         }
                     }
-                    if new.get_output_hardware() != old.get_output_hardware() {
-                        if new.get_output_hardware() == HardwareOutputStatus::Disabled {
+                    if values_neq!(new.get_output_hardware(), old.get_output_hardware()) {
+                        if new.get_output_hardware().unwrap() == HardwareOutputStatus::Disabled {
                             self.tts(format!("{} is really deaf", name));
                         } else {
                             self.tts(format!("{} can listen", name));
                         }
                     }
-                    if new.get_phonetic_name() != old.get_phonetic_name() {
+                    if values_neq!(new.get_phonetic_name(), old.get_phonetic_name()) {
                         self.tts(format!("{} is now known as {}", intern_get_connection_name(&old), name));
                     }
-                    if new.get_recording() != old.get_recording() {
-                        if new.get_recording() {
+                    if values_neq!(new.get_recording(), old.get_recording()) {
+                        if new.get_recording().unwrap() {
                             self.tts(format!("{} starts recording", name));
                         } else {
                             self.tts(format!("{} stops recording", name));
@@ -239,14 +260,15 @@ impl Plugin for TTSPlugin {
         connection_id: ConnectionId, connected: bool, _: String) {
         if let Some(server) = api.get_server(server_id) {
             // Ignore our own user
-            if connection_id != server.get_own_connection_id() {
+            if server.get_own_connection_id().ok().map_or(true, |c| c != connection_id) {
                 let name = get_connection_name(server, connection_id);
                 if !connected {
                     self.tts(format!("{} disconnected", name));
                 } else {
-                    let own_channel_id = server.get_connection(server.get_own_connection_id())
-                        .map(|c| c.get_channel_id());
-                    let channel_id = server.get_connection(connection_id).map(|c| c.get_channel_id());
+                    let own_channel_id = server.get_own_connection_id().ok()
+                        .and_then(|c| server.get_connection(c))
+                        .and_then(|c| c.get_channel_id().ok());
+                    let channel_id = server.get_connection(connection_id).and_then(|c| c.get_channel_id().ok());
                     if channel_id.is_some() && own_channel_id != channel_id {
                         self.tts(format!("{} connected to {}", name,
                             get_channel_name(server, channel_id.unwrap())));
@@ -265,12 +287,9 @@ impl Plugin for TTSPlugin {
             let connection = get_connection_name(server, connection_id);
             let new_channel = get_channel_name(server, new_channel_id);
             // Check if we are the client
-            if connection_id == server.get_own_connection_id() {
+            if Ok(connection_id) == server.get_own_connection_id() {
                 self.tts(format!("Switched to {}", new_channel));
             } else {
-                // Check if the client joined our own channel
-                let own_channel_id = server.get_connection(server.get_own_connection_id())
-                    .map(|c| c.get_channel_id());
                 // Inform about changed visibility
                 let vis = match visibility {
                     Visibility::Enter => " and appeared",
@@ -278,6 +297,10 @@ impl Plugin for TTSPlugin {
                     _ => "",
                 };
 
+                // Check if the client joined our own channel
+                let own_channel_id = server.get_own_connection_id().ok()
+                    .and_then(|c| server.get_connection(c))
+                    .and_then(|c| c.get_channel_id().ok());
                 match own_channel_id {
                     Some(channel_id) if channel_id == old_channel_id => self.tts(format!("{} left to {}{}", connection, new_channel, vis)),
                     Some(channel_id) if channel_id == new_channel_id => self.tts(format!("{} joined{}", connection, vis)),
@@ -295,12 +318,13 @@ impl Plugin for TTSPlugin {
             let new_channel = get_channel_name(server, new_channel_id);
             let invoker_name = get_invoker_name(server, &invoker);
             // Check if we are the client
-            if connection_id == server.get_own_connection_id() {
+            if Ok(connection_id) == server.get_own_connection_id() {
                 self.tts(format!("{} moved you to {}", invoker_name, new_channel));
             } else {
                 // Check if the client joined our own channel
-                let own_channel_id = server.get_connection(server.get_own_connection_id())
-                    .map(|c| c.get_channel_id());
+                let own_channel_id = server.get_own_connection_id().ok()
+                    .and_then(|c| server.get_connection(c))
+                    .and_then(|c| c.get_channel_id().ok());
                 // Inform about changed visibility
                 let vis = match visibility {
                     Visibility::Enter => " and appeared",
@@ -324,7 +348,7 @@ impl Plugin for TTSPlugin {
 
     fn connection_timeout(&mut self, api: &mut TsApi, server_id: ServerId, connection_id: ConnectionId) {
         if let Some(server) = api.get_server(server_id) {
-            if connection_id == server.get_own_connection_id() {
+            if Ok(connection_id) == server.get_own_connection_id() {
                 self.tts("Timed out");
             } else {
                 let connection = get_connection_name(server, connection_id);
@@ -366,12 +390,12 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn message(&mut self, api: &TsApi, server_id: ServerId, invoker: Invoker,
+    fn message(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Invoker,
         _: MessageReceiver, message: String, ignored: bool) -> bool {
         if !ignored {
             if let Some(server) = api.get_server(server_id) {
                 // Don't read our own messages
-                if invoker.get_id() != server.get_own_connection_id() {
+                if Ok(invoker.get_id()) != server.get_own_connection_id() {
                     if message.len() > 20 || message.contains("//") {
                         self.tts(format!("{} wrote a message", get_invoker_name(server,
                             &invoker)));
@@ -385,7 +409,7 @@ impl Plugin for TTSPlugin {
         false
     }
 
-    fn poke(&mut self, api: &TsApi, server_id: ServerId, invoker: Invoker,
+    fn poke(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Invoker,
         message: String, ignored: bool) -> bool {
         if !ignored {
             if let Some(server) = api.get_server(server_id) {
@@ -458,13 +482,13 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn permission_error(&mut self, _: &TsApi, _: ServerId,
+    fn permission_error(&mut self, _: &mut TsApi, _: ServerId,
         _: PermissionId, _: Error, message: String, _: String) -> bool {
         self.tts(format!("Denied {}", message));
         false
     }
 
-    fn shutdown(&mut self, api: &TsApi) {
+    fn shutdown(&mut self, api: &mut TsApi) {
         api.log_or_print("Shutdown", "TTSPlugin", LogLevel::Info);
         // Wait for tts threads to finish
         // Move JoinHandles out of the list, so we don't block the mutex
