@@ -16,4 +16,4 @@ lto = true
 
 [dependencies]
 lazy_static = "*"
-ts3plugin = "0.1"
+ts3plugin = {path = "../ts3plugin"} #"0.1"

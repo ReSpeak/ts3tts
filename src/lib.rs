@@ -165,10 +165,14 @@ impl Plugin for TTSPlugin {
         false
     }
 
-    fn server_edited(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Invoker) {
+    fn server_edited(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Option<Invoker>) {
         if let Some(server) = api.get_server(server_id) {
             //TODO Compare changes
-            self.tts(format!("{} edited the server", get_invoker_name(server, &invoker)));
+            if let Some(invoker) = invoker {
+                self.tts(format!("{} edited the server", get_invoker_name(server, &invoker)));
+            } else {
+                self.tts("The server was edited");
+            }
         }
     }
 
@@ -358,18 +362,26 @@ impl Plugin for TTSPlugin {
     }
 
     fn channel_created(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, invoker: Invoker) {
+        channel_id: ChannelId, invoker: Option<Invoker>) {
         if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} created {}", get_invoker_name(server, &invoker),
-                get_channel_name(server, channel_id)));
+            let name = if let Some(ref invoker) = invoker {
+                get_invoker_name(server, invoker)
+            } else {
+                "The server"
+            };
+            self.tts(format!("{} created {}", name, get_channel_name(server, channel_id)));
         }
     }
 
     fn channel_deleted(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, invoker: Invoker) {
+        channel_id: ChannelId, invoker: Option<Invoker>) {
         if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} deleted {}", get_invoker_name(server, &invoker),
-                get_channel_name(server, channel_id)));
+            let name = if let Some(ref invoker) = invoker {
+                get_invoker_name(server, invoker)
+            } else {
+                "The server"
+            };
+            self.tts(format!("{} deleted {}", name, get_channel_name(server, channel_id)));
         }
     }
 
@@ -383,10 +395,14 @@ impl Plugin for TTSPlugin {
     }
 
     fn channel_moved(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, _: ChannelId, invoker: Invoker) {
+        channel_id: ChannelId, _: ChannelId, invoker: Option<Invoker>) {
         if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} moved {}", get_invoker_name(server, &invoker),
-                get_channel_name(server, channel_id)));
+            let name = if let Some(ref invoker) = invoker {
+                get_invoker_name(server, invoker)
+            } else {
+                "The server"
+            };
+            self.tts(format!("{} moved {}", name, get_channel_name(server, channel_id)));
         }
     }
 
