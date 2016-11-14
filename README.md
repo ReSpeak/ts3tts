@@ -22,4 +22,4 @@ the resulting library into your TeamSpeak plugin folder.
 
 License
 -------
-This project is licensed under the GPLv2 license. The full license can be found in the `LICENSE` file.
+This project is licensed under the GPLv2 or later license. The full license can be found in the `LICENSE` file.
