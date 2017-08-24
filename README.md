@@ -11,8 +11,8 @@ Dependencies
  - [eSpeak](http://espeak.sourceforge.net/)
  - aplay
 
-It should be fairly simple to adjust the `tts` function to get the plugin working
-with other text to speech software or on windows.
+It should be fairly simple to adjust the `tts` function to get the plugin
+working with other text to speech software or on windows.
 
 Usage
 -----
@@ -22,4 +22,5 @@ the resulting library into your TeamSpeak plugin folder.
 
 License
 -------
-This project is licensed under the GPLv2 or later license. The full license can be found in the `LICENSE` file.
+This project is licensed under the GPLv2 or later license. The full license can
+be found in the `LICENSE` file.

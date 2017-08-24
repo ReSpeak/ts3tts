@@ -255,6 +255,29 @@ impl Plugin for TTSPlugin {
                             self.tts(format!("{} stops recording", name));
                         }
                     }
+                    // Not yet implemented in ts3plugin
+                    let opt_new = new.get_optional_data();
+                    let opt_old = old.get_optional_data();
+                    if values_neq!(opt_new.get_description(), opt_old.get_description()) {
+                        self.tts(format!("{} changed his description to {}", name, opt_new.get_description().unwrap()));
+                    }
+                    if values_neq!(opt_new.get_talker(), opt_old.get_talker()) {
+                        if opt_new.get_talker().unwrap() {
+                            self.tts(format!("{} is talker", name));
+                        } else {
+                            self.tts(format!("{} is no more talker", name));
+                        }
+                    }
+                    if values_neq!(opt_new.get_priority_speaker(), opt_old.get_priority_speaker()) {
+                        if opt_new.get_priority_speaker().unwrap() {
+                            self.tts(format!("{} has priority", name));
+                        } else {
+                            self.tts(format!("{} has no more priority", name));
+                        }
+                    }
+                    if opt_new.get_unread_messages() == Ok(true) {
+                        self.tts(format!("Unread message from {}", name));
+                    }
                 }
             }
         }
