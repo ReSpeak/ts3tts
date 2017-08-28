@@ -8,8 +8,6 @@
 
 #[macro_use]
 extern crate ts3plugin;
-#[macro_use]
-extern crate lazy_static;
 
 use std::os::unix::io::{ AsRawFd, FromRawFd };
 use std::process::*;
@@ -42,49 +40,42 @@ struct TTSPlugin {
 }
 
 /// Get the name or phonetic name of a server.
-fn get_server_name(server: &Server) -> &str {
+fn get_server_name<'a>(server: &'a Server) -> &'a str {
     server.get_phonetic_name().ok()
-        .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) })
-        .or_else(|| server.get_name().ok().map(|s| s.as_str()))
+        .and_then(|s| if s.is_empty() { None } else { Some(s) })
+        .or_else(|| server.get_name().ok())
         .unwrap_or("unknown server")
 }
 
 /// Get the name or phonetic name of a channel.
-fn get_channel_name<'a>(server: &'a Server, channel_id: ChannelId) -> &'a str {
-    server.get_channel(channel_id)
-        .and_then(|c| c.get_phonetic_name().ok()
+fn get_channel_name<'a>(channel: &'a Channel) -> &'a str {
+    (channel.get_phonetic_name().ok()
             .and_then(|s| if s.is_empty() { None } else { Some(s) })
-            .or_else(|| c.get_name().ok()))
-        .map(|s| s.as_str())
+            .or_else(|| channel.get_name().ok()))
         .unwrap_or("unknown channel")
 }
 
-fn intern_get_connection_name(connection: &Connection) -> &str {
+/// Get the name or phonetic name of a connection.
+fn get_connection_name<'a>(connection: &'a Connection) -> &'a str {
     let result = connection.get_phonetic_name().ok()
-        .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) })
-        .or_else(|| connection.get_name().ok().map(|s| s.as_str()))
+        .and_then(|s| if s.is_empty() { None } else { Some(s) })
+        .or_else(|| connection.get_name().ok())
         .unwrap_or("unknown");
     // Take name until the first space
     result.find(' ').map_or(result, |i| result.split_at(i).0)
 }
 
-/// Get the name or phonetic name of a connection.
-fn get_connection_name<'a>(server: &'a Server, connection_id: ConnectionId) -> &'a str {
-    server.get_connection(connection_id).map_or("unknown",
-        |connection| intern_get_connection_name(connection))
-}
-
 /// Get the name or phonetic name of an invoker.
 /// THis uses the connection name if a connection is available. If not, it uses
 /// the provided invoker name.
-fn get_invoker_name<'a>(server: &'a Server, invoker: &'a Invoker) -> &'a str {
-    let result = if server.get_connection(invoker.get_id()).is_some() {
-            get_connection_name(server, invoker.get_id())
+fn get_invoker_name(invoker: &Invoker) -> String {
+    let result = if let Some(connection) = invoker.get_connection() {
+            get_connection_name(&connection).to_string()
         } else {
-            invoker.get_name().as_str()
+            invoker.get_name().to_string()
         };
     // Take name until the first space
-    result.find(' ').map_or(result, |i| result.split_at(i).0)
+    result.find(' ').map_or(result.clone(), move |i| result.split_at(i).0.to_string())
 }
 
 impl TTSPlugin {
@@ -133,401 +124,367 @@ impl TTSPlugin {
 }
 
 impl Plugin for TTSPlugin {
-    fn new(api: &mut TsApi) -> Result<Box<TTSPlugin>, InitError> {
+    fn name() -> String { String::from("Text to Speech") }
+    fn version() -> String { String::from("0.2.0") }
+    fn author() -> String { String::from("Seebi") }
+    fn description() -> String { String::from("A text to speech plugin.") }
+
+    fn new(api: &TsApi) -> Result<Box<TTSPlugin>, InitError> {
         api.log_or_print("Starting", "TTSPlugin", LogLevel::Info);
         Ok(Box::new(TTSPlugin {
             tts_threads: Arc::new(Mutex::new((Vec::new(), 0))),
         }))
     }
 
-    fn connect_status_change(&mut self, api: &mut TsApi, server_id: ServerId,
+    fn connect_status_change(&mut self, _: &TsApi, server: &Server,
         status: ConnectStatus, _: Error) {
-        if let Some(server) = api.get_server(server_id) {
-            match status {
-                ConnectStatus::Connected => self.tts(format!("Connected to {}", get_server_name(server))),
-                ConnectStatus::Disconnected => self.tts(format!("Disconnected from {}", get_server_name(server))),
-                _ => {}
-            }
+        match status {
+            ConnectStatus::Connected => self.tts(format!("Connected to {}", get_server_name(server))),
+            ConnectStatus::Disconnected => self.tts(format!("Disconnected from {}", get_server_name(server))),
+            _ => {}
         }
     }
 
-    fn server_stop(&mut self, api: &mut TsApi, server_id: ServerId, message: String) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} stopped{}", get_server_name(server),
-                if message.is_empty() { String::new() } else { format!(" because {}", message) }));
-        }
+    fn server_stop(&mut self, _: &TsApi, server: &Server, message: String) {
+        self.tts(format!("{} stopped{}", get_server_name(server),
+            if message.is_empty() { String::new() } else { format!(" because {}", message) }));
     }
 
-    fn server_error(&mut self, api: &mut TsApi, _: ServerId, error: Error,
+    fn server_error(&mut self, api: &TsApi, _: &Server, error: Error,
         message: String, _: String, extra_message: String) -> bool {
         api.log_or_print(format!("A server error occured: {} ({:?}; {})", message,
             error, extra_message), "TTSPlugin", LogLevel::Error);
         false
     }
 
-    fn server_edited(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Option<Invoker>) {
-        if let Some(server) = api.get_server(server_id) {
-            //TODO Compare changes
-            if let Some(invoker) = invoker {
-                self.tts(format!("{} edited the server", get_invoker_name(server, &invoker)));
-            } else {
-                self.tts("The server was edited");
-            }
+    fn server_edited(&mut self, _: &TsApi, _: &Server, invoker: Option<&Invoker>) {
+        //TODO Compare changes
+        if let Some(invoker) = invoker {
+            self.tts(format!("{} edited the server", get_invoker_name(&invoker)));
+        } else {
+            self.tts("The server was edited");
         }
     }
 
-    fn connection_updated(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, old_connection: Option<Connection>, _: Invoker) {
-        if let Some(server) = api.get_server(server_id) {
-            // Compare changes
-            if let Some(old) = old_connection {
-                if let Some(new) = server.get_connection(connection_id) {
-                    let name = get_connection_name(server, connection_id);
+    fn connection_updated(&mut self, _: &TsApi, _: &Server,
+        connection: &Connection, old_connection: &Connection, _: &Invoker) {
+        // Compare changes
+        let new = connection;
+        let old = old_connection;
+        let name = get_connection_name(connection);
 
-                    if values_neq!(new.get_name(), old.get_name()) {
-                        // Don't use the phonetic name here
-                        self.tts(format!("{} is now known as {}",
-                            intern_get_connection_name(&old),
-                            new.get_name().map(|s| s.as_str()).unwrap_or("unknown")));
+        if values_neq!(new.get_name(), old.get_name()) {
+            // Don't use the phonetic name here
+            self.tts(format!("{} is now known as {}",
+                get_connection_name(&old),
+                new.get_name().unwrap_or("unknown")));
+        }
+        if values_neq!(new.get_away(), old.get_away()) {
+            if new.get_away().unwrap() == AwayStatus::Zzz {
+                self.tts(format!("{} has gone{}", name,
+                    new.get_away_message().ok().and_then(|s| if s.is_empty() {
+                        None
+                    } else {
+                        Some(format!(" to {}", s))
+                    }).unwrap_or(String::new())));
+            } else {
+                self.tts(format!("{} is back", name));
+            }
+        } else if new.get_away().map(|a| a == AwayStatus::Zzz).unwrap_or(false)
+            && values_neq!(new.get_away_message(), old.get_away_message()) {
+            self.tts(format!("{} has gone{}", name,
+                new.get_away_message().ok().and_then(|s| if s.is_empty() {
+                    None
+                } else {
+                    Some(format!(" to {}", s))
+                }).unwrap_or(String::new())));
+        }
+        if values_neq!(new.get_input_muted(), old.get_input_muted()) {
+            if new.get_input_muted().unwrap() == MuteInputStatus::Muted {
+                self.tts(format!("{} is muted", name));
+            } else {
+                self.tts(format!("{} is unmuted", name));
+            }
+        }
+        if values_neq!(new.get_output_muted(), old.get_output_muted()) {
+            if new.get_output_muted().unwrap() == MuteOutputStatus::Muted {
+                self.tts(format!("{} is deaf", name));
+            } else {
+                self.tts(format!("{} is listening", name));
+            }
+        }
+        if values_neq!(new.get_output_only_muted(), old.get_output_only_muted()) {
+            if new.get_output_only_muted().unwrap() == MuteOutputStatus::Muted {
+                self.tts(format!("{} is only deaf", name));
+            } else {
+                self.tts(format!("{} is listening again", name));
+            }
+        }
+        if values_neq!(new.get_input_hardware(), old.get_input_hardware()) {
+            if new.get_input_hardware().unwrap() == HardwareInputStatus::Disabled {
+                self.tts(format!("{} is silent", name));
+            } else {
+                self.tts(format!("{} can talk", name));
+            }
+        }
+        if values_neq!(new.get_output_hardware(), old.get_output_hardware()) {
+            if new.get_output_hardware().unwrap() == HardwareOutputStatus::Disabled {
+                self.tts(format!("{} is really deaf", name));
+            } else {
+                self.tts(format!("{} can listen", name));
+            }
+        }
+        if values_neq!(new.get_phonetic_name(), old.get_phonetic_name()) {
+            self.tts(format!("{} is now known as {}", get_connection_name(&old), name));
+        }
+        if values_neq!(new.get_recording(), old.get_recording()) {
+            if new.get_recording().unwrap() {
+                self.tts(format!("{} starts recording", name));
+            } else {
+                self.tts(format!("{} stops recording", name));
+            }
+        }
+        // FIXME Not yet implemented in ts3plugin
+        if let Some(opt_new) = new.get_optional_data() {
+            if let Some(opt_old) = old.get_optional_data() {
+                if values_neq!(opt_new.get_description(), opt_old.get_description()) {
+                    self.tts(format!("{} changed his description to {}", name, opt_new.get_description().unwrap()));
+                }
+                if values_neq!(opt_new.get_talker(), opt_old.get_talker()) {
+                    if opt_new.get_talker().unwrap() {
+                        self.tts(format!("{} is talker", name));
+                    } else {
+                        self.tts(format!("{} is no more talker", name));
                     }
-                    if values_neq!(new.get_away(), old.get_away()) {
-                        if new.get_away().unwrap() == AwayStatus::Zzz {
-                            self.tts(format!("{} has gone{}", name,
-                                new.get_away_message().ok().and_then(|s| if s.is_empty() {
-                                    None
-                                } else {
-                                    Some(format!(" to {}", s))
-                                }).unwrap_or(String::new())));
-                        } else {
-                            self.tts(format!("{} is back", name));
-                        }
-                    } else if new.get_away().map(|a| a == AwayStatus::Zzz).unwrap_or(false)
-                        && values_neq!(new.get_away_message(), old.get_away_message()) {
-                        self.tts(format!("{} has gone{}", name,
-                            new.get_away_message().ok().and_then(|s| if s.is_empty() {
-                                None
-                            } else {
-                                Some(format!(" to {}", s))
-                            }).unwrap_or(String::new())));
+                }
+                if values_neq!(opt_new.get_priority_speaker(), opt_old.get_priority_speaker()) {
+                    if opt_new.get_priority_speaker().unwrap() {
+                        self.tts(format!("{} has priority", name));
+                    } else {
+                        self.tts(format!("{} has no more priority", name));
                     }
-                    if values_neq!(new.get_input_muted(), old.get_input_muted()) {
-                        if new.get_input_muted().unwrap() == MuteInputStatus::Muted {
-                            self.tts(format!("{} is muted", name));
-                        } else {
-                            self.tts(format!("{} is unmuted", name));
-                        }
-                    }
-                    if values_neq!(new.get_output_muted(), old.get_output_muted()) {
-                        if new.get_output_muted().unwrap() == MuteOutputStatus::Muted {
-                            self.tts(format!("{} is deaf", name));
-                        } else {
-                            self.tts(format!("{} is listening", name));
-                        }
-                    }
-                    if values_neq!(new.get_output_only_muted(), old.get_output_only_muted()) {
-                        if new.get_output_only_muted().unwrap() == MuteOutputStatus::Muted {
-                            self.tts(format!("{} is only deaf", name));
-                        } else {
-                            self.tts(format!("{} is listening again", name));
-                        }
-                    }
-                    if values_neq!(new.get_input_hardware(), old.get_input_hardware()) {
-                        if new.get_input_hardware().unwrap() == HardwareInputStatus::Disabled {
-                            self.tts(format!("{} is silent", name));
-                        } else {
-                            self.tts(format!("{} can talk", name));
-                        }
-                    }
-                    if values_neq!(new.get_output_hardware(), old.get_output_hardware()) {
-                        if new.get_output_hardware().unwrap() == HardwareOutputStatus::Disabled {
-                            self.tts(format!("{} is really deaf", name));
-                        } else {
-                            self.tts(format!("{} can listen", name));
-                        }
-                    }
-                    if values_neq!(new.get_phonetic_name(), old.get_phonetic_name()) {
-                        self.tts(format!("{} is now known as {}", intern_get_connection_name(&old), name));
-                    }
-                    if values_neq!(new.get_recording(), old.get_recording()) {
-                        if new.get_recording().unwrap() {
-                            self.tts(format!("{} starts recording", name));
-                        } else {
-                            self.tts(format!("{} stops recording", name));
-                        }
-                    }
-                    // Not yet implemented in ts3plugin
-                    let opt_new = new.get_optional_data();
-                    let opt_old = old.get_optional_data();
-                    if values_neq!(opt_new.get_description(), opt_old.get_description()) {
-                        self.tts(format!("{} changed his description to {}", name, opt_new.get_description().unwrap()));
-                    }
-                    if values_neq!(opt_new.get_talker(), opt_old.get_talker()) {
-                        if opt_new.get_talker().unwrap() {
-                            self.tts(format!("{} is talker", name));
-                        } else {
-                            self.tts(format!("{} is no more talker", name));
-                        }
-                    }
-                    if values_neq!(opt_new.get_priority_speaker(), opt_old.get_priority_speaker()) {
-                        if opt_new.get_priority_speaker().unwrap() {
-                            self.tts(format!("{} has priority", name));
-                        } else {
-                            self.tts(format!("{} has no more priority", name));
-                        }
-                    }
-                    if opt_new.get_unread_messages() == Ok(true) {
-                        self.tts(format!("Unread message from {}", name));
-                    }
+                }
+                if opt_new.get_unread_messages() == Ok(true) {
+                    self.tts(format!("Unread message from {}", name));
                 }
             }
         }
     }
 
-    fn connection_changed(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, connected: bool, _: String) {
-        if let Some(server) = api.get_server(server_id) {
-            // Ignore our own user
-            if server.get_own_connection_id().ok().map_or(true, |c| c != connection_id) {
-                let name = get_connection_name(server, connection_id);
-                if !connected {
-                    self.tts(format!("{} disconnected", name));
-                } else {
-                    let own_channel_id = server.get_own_connection_id().ok()
-                        .and_then(|c| server.get_connection(c))
-                        .and_then(|c| c.get_channel_id().ok());
-                    let channel_id = server.get_connection(connection_id).and_then(|c| c.get_channel_id().ok());
-                    if channel_id.is_some() && own_channel_id != channel_id {
+    fn connection_changed(&mut self, _: &TsApi, server: &Server,
+        connection: &Connection, connected: bool, _: String) {
+        // Ignore our own user
+        if server.get_own_connection().ok().map_or(true, |c| c != *connection) {
+            let name = get_connection_name(connection);
+            if !connected {
+                self.tts(format!("{} disconnected", name));
+            } else {
+                let own_channel = server.get_own_connection().ok()
+                    .and_then(|c| c.get_channel().ok());
+                let channel = connection.get_channel().ok();
+                if let Some(channel) = channel {
+                    if own_channel.unwrap() != channel {
                         self.tts(format!("{} connected to {}", name,
-                            get_channel_name(server, channel_id.unwrap())));
+                            get_channel_name(&channel)));
                     } else {
                         self.tts(format!("{} connected", name));
                     }
+                } else {
+                    self.tts(format!("{} connected to unknown channel", name));
                 }
             }
         }
     }
 
-    fn connection_move(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, old_channel_id: ChannelId,
-        new_channel_id: ChannelId, visibility: Visibility) {
-        if let Some(server) = api.get_server(server_id) {
-            let connection = get_connection_name(server, connection_id);
-            let new_channel = get_channel_name(server, new_channel_id);
-            // Check if we are the client
-            if Ok(connection_id) == server.get_own_connection_id() {
-                self.tts(format!("Switched to {}", new_channel));
-            } else {
-                // Inform about changed visibility
-                let vis = match visibility {
-                    Visibility::Enter => " and appeared",
-                    Visibility::Leave => " and disappeared",
-                    _ => "",
-                };
+    fn connection_move(&mut self, _: &TsApi, server: &Server,
+        connection: &Connection, old_channel: &Channel,
+        new_channel: &Channel, visibility: Visibility) {
+        let connection_name = get_connection_name(connection);
+        let new_channel_name = get_channel_name(new_channel);
+        // Check if we are the client
+        if Ok(connection) == server.get_own_connection().as_ref() {
+            self.tts(format!("Switched to {}", new_channel_name));
+        } else {
+            // Inform about changed visibility
+            let vis = match visibility {
+                Visibility::Enter => " and appeared",
+                Visibility::Leave => " and disappeared",
+                _ => "",
+            };
 
-                // Check if the client joined our own channel
-                let own_channel_id = server.get_own_connection_id().ok()
-                    .and_then(|c| server.get_connection(c))
-                    .and_then(|c| c.get_channel_id().ok());
-                match own_channel_id {
-                    Some(channel_id) if channel_id == old_channel_id => self.tts(format!("{} left to {}{}", connection, new_channel, vis)),
-                    Some(channel_id) if channel_id == new_channel_id => self.tts(format!("{} joined{}", connection, vis)),
-                    _ => self.tts(format!("{} switched to {}{}", connection, new_channel, vis)),
-                }
+            // Check if the client joined our own channel
+            let own_channel = server.get_own_connection().ok()
+                .and_then(|c| c.get_channel().ok());
+            match own_channel {
+                Some(ref channel) if channel == old_channel => self.tts(format!("{} left to {}{}", connection_name, new_channel_name, vis)),
+                Some(ref channel) if channel == new_channel => self.tts(format!("{} joined{}", connection_name, vis)),
+                _ => self.tts(format!("{} switched to {}{}", connection_name, new_channel_name, vis)),
             }
         }
     }
 
-    fn connection_moved(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, old_channel_id: ChannelId,
-        new_channel_id: ChannelId, visibility: Visibility, invoker: Invoker) {
-        if let Some(server) = api.get_server(server_id) {
-            let connection = get_connection_name(server, connection_id);
-            let new_channel = get_channel_name(server, new_channel_id);
-            let invoker_name = get_invoker_name(server, &invoker);
-            // Check if we are the client
-            if Ok(connection_id) == server.get_own_connection_id() {
-                self.tts(format!("{} moved you to {}", invoker_name, new_channel));
-            } else {
-                // Check if the client joined our own channel
-                let own_channel_id = server.get_own_connection_id().ok()
-                    .and_then(|c| server.get_connection(c))
-                    .and_then(|c| c.get_channel_id().ok());
-                // Inform about changed visibility
-                let vis = match visibility {
-                    Visibility::Enter => " and appeared",
-                    Visibility::Leave => " and disappeared",
-                    _ => "",
-                };
+    fn connection_moved(&mut self, _: &TsApi, server: &Server,
+        connection: &Connection, old_channel: &Channel,
+        new_channel: &Channel, visibility: Visibility, invoker: &Invoker) {
+        let connection_name = get_connection_name(connection);
+        let new_channel_name = get_channel_name(new_channel);
+        let invoker_name = get_invoker_name(&invoker);
+        // Check if we are the client
+        if Ok(connection) == server.get_own_connection().as_ref() {
+            self.tts(format!("{} moved you to {}", invoker_name, new_channel_name));
+        } else {
+            // Check if the client joined our own channel
+            let own_channel = server.get_own_connection().ok()
+                .and_then(|c| c.get_channel().ok());
+            // Inform about changed visibility
+            let vis = match visibility {
+                Visibility::Enter => " and appeared",
+                Visibility::Leave => " and disappeared",
+                _ => "",
+            };
 
-                match own_channel_id {
-                    Some(channel_id) if channel_id == old_channel_id =>
-                        self.tts(format!("{} moved {} out to {}{}", invoker_name,
-                            connection, new_channel, vis)),
-                    Some(channel_id) if channel_id == new_channel_id =>
-                        self.tts(format!("{} moved {} in{}", invoker_name,
-                            connection, vis)),
-                    _ => self.tts(format!("{} moved {} to {}{}", invoker_name,
-                        connection, new_channel, vis)),
-                }
+            match own_channel {
+                Some(ref channel) if channel == old_channel =>
+                    self.tts(format!("{} moved {} out to {}{}", invoker_name,
+                        connection_name, new_channel_name, vis)),
+                Some(ref channel) if channel == new_channel =>
+                    self.tts(format!("{} moved {} in{}", invoker_name,
+                        connection_name, vis)),
+                _ => self.tts(format!("{} moved {} to {}{}", invoker_name,
+                    connection_name, new_channel_name, vis)),
             }
         }
     }
 
-    fn connection_timeout(&mut self, api: &mut TsApi, server_id: ServerId, connection_id: ConnectionId) {
-        if let Some(server) = api.get_server(server_id) {
-            if Ok(connection_id) == server.get_own_connection_id() {
-                self.tts("Timed out");
-            } else {
-                let connection = get_connection_name(server, connection_id);
-                self.tts(format!("{} timed out", connection));
-            }
+    fn connection_timeout(&mut self, _: &TsApi, server: &Server, connection: &Connection) {
+        if Ok(connection) == server.get_own_connection().as_ref() {
+            self.tts("Timed out");
+        } else {
+            let connection = get_connection_name(connection);
+            self.tts(format!("{} timed out", connection));
         }
     }
 
-    fn channel_created(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, invoker: Option<Invoker>) {
-        if let Some(server) = api.get_server(server_id) {
-            let name = if let Some(ref invoker) = invoker {
-                get_invoker_name(server, invoker)
-            } else {
-                "The server"
-            };
-            self.tts(format!("{} created {}", name, get_channel_name(server, channel_id)));
-        }
+    fn channel_created(&mut self, _: &TsApi, _: &Server,
+        channel: &Channel, invoker: Option<&Invoker>) {
+        let name = if let Some(ref invoker) = invoker {
+            get_invoker_name(invoker)
+        } else {
+            String::from("The server")
+        };
+        self.tts(format!("{} created {}", name, get_channel_name(channel)));
     }
 
-    fn channel_deleted(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, invoker: Option<Invoker>) {
-        if let Some(server) = api.get_server(server_id) {
-            let name = if let Some(ref invoker) = invoker {
-                get_invoker_name(server, invoker)
-            } else {
-                "The server"
-            };
-            self.tts(format!("{} deleted {}", name, get_channel_name(server, channel_id)));
-        }
+    fn channel_deleted(&mut self, _: &TsApi, _: &Server,
+        channel: &Channel, invoker: Option<&Invoker>) {
+        let name = if let Some(ref invoker) = invoker {
+            get_invoker_name(invoker)
+        } else {
+            String::from("The server")
+        };
+        self.tts(format!("{} deleted {}", name, get_channel_name(channel)));
     }
 
-    fn channel_edited(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, _: Option<Channel>, invoker: Invoker) {
-        if let Some(server) = api.get_server(server_id) {
-            //TODO Compare changes
-            self.tts(format!("{} edited {}", get_invoker_name(server, &invoker),
-                get_channel_name(server, channel_id)));
-        }
+    fn channel_edited(&mut self, _: &TsApi, _: &Server,
+        channel: &Channel, _: &Channel, invoker: &Invoker) {
+        //TODO Compare changes
+        self.tts(format!("{} edited {}", get_invoker_name(&invoker),
+            get_channel_name(channel)));
     }
 
-    fn channel_moved(&mut self, api: &mut TsApi, server_id: ServerId,
-        channel_id: ChannelId, _: ChannelId, invoker: Option<Invoker>) {
-        if let Some(server) = api.get_server(server_id) {
-            let name = if let Some(ref invoker) = invoker {
-                get_invoker_name(server, invoker)
-            } else {
-                "The server"
-            };
-            self.tts(format!("{} moved {}", name, get_channel_name(server, channel_id)));
-        }
+    fn channel_moved(&mut self, _: &TsApi, _: &Server,
+        channel: &Channel, _: &Channel, invoker: Option<&Invoker>) {
+        let name = if let Some(ref invoker) = invoker {
+            get_invoker_name(invoker)
+        } else {
+            String::from("The server")
+        };
+        self.tts(format!("{} moved {}", name, get_channel_name(channel)));
     }
 
-    fn message(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Invoker,
+    fn message(&mut self, _: &TsApi, server: &Server, invoker: &Invoker,
         _: MessageReceiver, message: String, ignored: bool) -> bool {
         if !ignored {
-            if let Some(server) = api.get_server(server_id) {
-                // Don't read our own messages
-                if Ok(invoker.get_id()) != server.get_own_connection_id() {
-                    if message.len() > 20 || message.contains("//") {
-                        self.tts(format!("{} wrote a message", get_invoker_name(server,
-                            &invoker)));
-                    } else {
-                        self.tts(format!("{} wrote {}", get_invoker_name(server, &invoker),
-                            message));
-                    }
+            // Don't read our own messages
+            if invoker.get_connection() != server.get_own_connection().ok() {
+                if message.len() > 20 || message.contains("//") {
+                    self.tts(format!("{} wrote a message",
+                        get_invoker_name(&invoker)));
+                } else {
+                    self.tts(format!("{} wrote {}", get_invoker_name(&invoker),
+                        message));
                 }
             }
         }
         false
     }
 
-    fn poke(&mut self, api: &mut TsApi, server_id: ServerId, invoker: Invoker,
+    fn poke(&mut self, _: &TsApi, _: &Server, invoker: &Invoker,
         message: String, ignored: bool) -> bool {
         if !ignored {
-            if let Some(server) = api.get_server(server_id) {
-                self.tts(format!("{} poked {}", get_invoker_name(server, &invoker),
-                    message));
-            }
+            self.tts(format!("{} poked {}", get_invoker_name(&invoker),
+                message));
         }
         false
     }
 
-    fn channel_kick(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, _: ChannelId, new_channel_id: ChannelId,
-        _: Visibility, invoker: Invoker, message: String) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} kicked {} to {}{}", get_invoker_name(server, &invoker),
-                get_connection_name(server, connection_id),
-                get_channel_name(server, new_channel_id),
-                if message.is_empty() { String::new() } else { format!(" because {}", message) }));
-        }
+    fn channel_kick(&mut self, _: &TsApi, _: &Server,
+        connection: &Connection, _: &Channel, new_channel: &Channel,
+        _: Visibility, invoker: &Invoker, message: String) {
+        self.tts(format!("{} kicked {} to {}{}", get_invoker_name(&invoker),
+            get_connection_name(connection),
+            get_channel_name(new_channel),
+            if message.is_empty() { String::new() } else { format!(" because {}", message) }));
     }
 
-    fn server_kick(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, invoker: Invoker, message: String) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} kicked {}{}", get_invoker_name(server, &invoker),
-                get_connection_name(server, connection_id),
-                if message.is_empty() { String::new() } else { format!(" because {}", message) }));
-        }
+    fn server_kick(&mut self, _: &TsApi, _: &Server,
+        connection: &Connection, invoker: &Invoker, message: String) {
+        self.tts(format!("{} kicked {}{}", get_invoker_name(&invoker),
+            get_connection_name(connection),
+            if message.is_empty() { String::new() } else { format!(" because {}", message) }));
     }
 
-    fn server_ban(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, invoker: Invoker, message: String, _: u64) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} banned {}{}", get_invoker_name(server, &invoker),
-                get_connection_name(server, connection_id),
-                if message.is_empty() { String::new() } else { format!(" because {}", message) }));
-        }
+    fn server_ban(&mut self, _: &TsApi, _: &Server,
+        connection: &Connection, invoker: &Invoker, message: String, _: u64) {
+        self.tts(format!("{} banned {}{}", get_invoker_name(&invoker),
+            get_connection_name(connection),
+            if message.is_empty() { String::new() } else { format!(" because {}", message) }));
     }
 
-    fn avatar_changed(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection_id: ConnectionId, path: Option<String>) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} {} his avatar", get_connection_name(server, connection_id),
-                if path.is_none() { "removed" } else { "changed" }));
-        }
+    fn avatar_changed(&mut self, _: &TsApi, _: &Server,
+        connection: &Connection, path: Option<String>) {
+        self.tts(format!("{} {} his avatar", get_connection_name(connection),
+            if path.is_none() { "removed" } else { "changed" }));
     }
 
     // Called at each channel switch
-    /*fn connection_channel_group_changed(&mut self, api: &mut TsApi, server_id: ServerId,
+    /*fn connection_channel_group_changed(&mut self, api: &TsApi, server_id: ServerId,
         connection_id: ConnectionId, _: ChannelGroupId, _: ChannelId,
-        _: Invoker) {
+        _: &Invoker) {
         if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} changed channel group", get_connection_name(server, connection_id)));
+            self.tts(format!("{} changed channel group", get_connection_name(connection_id)));
         }
     }*/
 
-    fn connection_server_group_added(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection: Invoker, _: ServerGroupId, invoker: Invoker) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} added {} to a group", get_invoker_name(server, &invoker),
-                get_invoker_name(server, &connection)));
-        }
+    fn connection_server_group_added(&mut self, _: &TsApi, _: &Server,
+        connection: &Invoker, _: &ServerGroup, invoker: &Invoker) {
+        self.tts(format!("{} added {} to a group", get_invoker_name(&invoker),
+            get_invoker_name(&connection)));
     }
 
-    fn connection_server_group_removed(&mut self, api: &mut TsApi, server_id: ServerId,
-        connection: Invoker, _: ServerGroupId, invoker: Invoker) {
-        if let Some(server) = api.get_server(server_id) {
-            self.tts(format!("{} removed {} from a group", get_invoker_name(server, &invoker),
-                get_invoker_name(server, &connection)));
-        }
+    fn connection_server_group_removed(&mut self, _: &TsApi, _: &Server,
+        connection: &Invoker, _: &ServerGroup, invoker: &Invoker) {
+        self.tts(format!("{} removed {} from a group", get_invoker_name(&invoker),
+            get_invoker_name(&connection)));
     }
 
-    fn permission_error(&mut self, _: &mut TsApi, _: ServerId,
-        _: PermissionId, _: Error, message: String, _: String) -> bool {
+    fn permission_error(&mut self, _: &TsApi, _: &Server,
+        _: &Permission, _: Error, message: String, _: String) -> bool {
         self.tts(format!("Denied {}", message));
         false
     }
 
-    fn shutdown(&mut self, api: &mut TsApi) {
+    fn shutdown(&mut self, api: &TsApi) {
         api.log_or_print("Shutdown", "TTSPlugin", LogLevel::Info);
         // Wait for tts threads to finish
         // Move JoinHandles out of the list, so we don't block the mutex
@@ -545,5 +502,4 @@ impl Plugin for TTSPlugin {
     }
 }
 
-create_plugin!("Text to Speech", "0.2.0", "Seebi", "A text to speech plugin.",
-    ConfigureOffer::No, false, TTSPlugin);
+create_plugin!(TTSPlugin);
