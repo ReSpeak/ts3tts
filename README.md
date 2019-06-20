@@ -4,7 +4,7 @@ TeamSpeak3 Text to Speech Plugin
 This plugin adds the possibility to have text to speech on non-windows systems,
 which is not working by default.
 
-The plugin is built using the [TS3Plugin](https://github.com/Flakebi/rust-ts3plugin) library.
+The plugin is built using the [TS3Plugin](https://github.com/ReSpeak/rust-ts3plugin) library.
 
 Dependencies
 -----------

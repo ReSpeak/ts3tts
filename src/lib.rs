@@ -92,20 +92,17 @@ impl TTSPlugin {
             threads_lock.1 = thread_num;
             // The moved variables should be threads and thread_num.
             threads_lock.0.push((thread::spawn(move || {
-                // Pipe the output of espeak into aplay because espeak itself produces
-                // stuttering sometimes.
-                if let Ok(mut tts_process) = Command::new("espeak").arg("-ven+f2").arg("-s150")
-                    .arg("--stdout").arg("--").arg(&msg).stdout(Stdio::piped()).spawn() {
-                    // Write efficiently into aplay, unfortunately we need some
-                    // unsafe code for that.
-                    let handle = tts_process.stdout.as_ref().unwrap().as_raw_fd();
-                    match Command::new("aplay").stdin(unsafe { Stdio::from_raw_fd(handle) }).spawn() {
-                        Ok(mut play_process) => if let Err(error) = play_process.wait() {
-                            TsApi::static_log_or_print(format!("Can't wait for aplay process because {}", error), "TTSPlugin", LogLevel::Error);
-                        },
-                        Err(error) => TsApi::static_log_or_print(format!("Can't start aplay process because {}", error), "TTSPlugin", LogLevel::Error)
-                    }
-
+                // Command::new("espeak").arg("-ven+f2").arg("-s150").arg("--").arg(&msg)
+                if let Ok(mut tts_process) = Command::new("gst-play-1.0")
+                    .arg("--no-interactive")
+                    .arg("--quiet")
+                    .arg(&format!(
+                    "http://localhost:59125/process?\
+                    INPUT_TYPE=TEXT&OUTPUT_TYPE=AUDIO&AUDIO=WAVE&LOCALE=en_US\
+                    &VOICE=cmu-slt-hsmm\
+                    &effect_Volume_selected=on&effect_Volume_parameters=amount%3A0.05%3B\
+                    &effect_Rate_selected=on&effect_Rate_parameters=durScale%3A3.0%3B\
+                    &INPUT_TEXT={}!", msg)).spawn() {
                     if let Err(error) = tts_process.wait() {
                         TsApi::static_log_or_print(format!("Can't wait for espeak process because {}", error), "TTSPlugin", LogLevel::Error);
                     }
@@ -125,7 +122,6 @@ impl TTSPlugin {
 
 impl Plugin for TTSPlugin {
     fn name() -> String { String::from("Text to Speech") }
-    fn version() -> String { String::from("0.2.0") }
     fn author() -> String { String::from("Seebi") }
     fn description() -> String { String::from("A text to speech plugin.") }
 
@@ -166,8 +162,16 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn connection_updated(&mut self, _: &TsApi, _: &Server,
-        connection: &Connection, old_connection: &Connection, _: &Invoker) {
+    fn connection_info(&mut self, api: &TsApi, server: &Server,
+	connection: &Connection) {
+        //api.log_or_print(format!("Con info: {:?}", connection), "TTSPlugin", LogLevel::Debug);
+    }
+
+    fn connection_properties_changed(&mut self, api: &TsApi, _: &Server,
+        connection: &Connection, old_connection: &Connection,
+        changes: ConnectionChanges, _: &Invoker) {
+        //api.log_or_print(format!("Props changed: {:?} {:?}", connection, changes), "TTSPlugin", LogLevel::Debug);
+
         // Compare changes
         let new = connection;
         let old = old_connection;
@@ -245,7 +249,7 @@ impl Plugin for TTSPlugin {
             }
         }
         // FIXME Not yet implemented in ts3plugin
-        if let Some(opt_new) = new.get_optional_data() {
+        /*if let Some(opt_new) = new.get_optional_data() {
             if let Some(opt_old) = old.get_optional_data() {
                 if values_neq!(opt_new.get_description(), opt_old.get_description()) {
                     self.tts(format!("{} changed his description to {}", name, opt_new.get_description().unwrap()));
@@ -268,11 +272,17 @@ impl Plugin for TTSPlugin {
                     self.tts(format!("Unread message from {}", name));
                 }
             }
-        }
+        }*/
     }
 
-    fn connection_changed(&mut self, _: &TsApi, server: &Server,
+	fn connection_announced(&mut self, api: &TsApi, server: &Server,
+		connection: &Connection, appeared: bool) {
+        //api.log_or_print(format!("Con announced: {:?} appeared {}", connection, appeared), "TTSPlugin", LogLevel::Debug);
+	}
+
+    fn connection_changed(&mut self, api: &TsApi, server: &Server,
         connection: &Connection, connected: bool, _: String) {
+        //api.log_or_print(format!("Con changed: {:?} connected {}", connection, connected), "TTSPlugin", LogLevel::Debug);
         // Ignore our own user
         if server.get_own_connection().ok().map_or(true, |c| c != *connection) {
             let name = get_connection_name(connection);
@@ -296,9 +306,10 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn connection_move(&mut self, _: &TsApi, server: &Server,
+    fn connection_move(&mut self, api: &TsApi, server: &Server,
         connection: &Connection, old_channel: &Channel,
         new_channel: &Channel, visibility: Visibility) {
+        //api.log_or_print(format!("Con move: {:?} visibility {:?}", connection, visibility), "TTSPlugin", LogLevel::Debug);
         let connection_name = get_connection_name(connection);
         let new_channel_name = get_channel_name(new_channel);
         // Check if we are the client
@@ -323,9 +334,11 @@ impl Plugin for TTSPlugin {
         }
     }
 
-    fn connection_moved(&mut self, _: &TsApi, server: &Server,
+    fn connection_moved(&mut self, api: &TsApi, server: &Server,
         connection: &Connection, old_channel: &Channel,
         new_channel: &Channel, visibility: Visibility, invoker: &Invoker) {
+        //api.log_or_print(format!("Con moved: {:?} visibility {:?}", connection, visibility), "TTSPlugin", LogLevel::Debug);
+
         let connection_name = get_connection_name(connection);
         let new_channel_name = get_channel_name(new_channel);
         let invoker_name = get_invoker_name(&invoker);
