@@ -93,18 +93,15 @@ impl TTSPlugin {
             // The moved variables should be threads and thread_num.
             threads_lock.0.push((thread::spawn(move || {
                 // Command::new("espeak").arg("-ven+f2").arg("-s150").arg("--").arg(&msg)
-                if let Ok(mut tts_process) = Command::new("gst-play-1.0")
-                    .arg("--no-interactive")
-                    .arg("--quiet")
-                    .arg(&format!(
-                    "http://localhost:59125/process?\
-                    INPUT_TYPE=TEXT&OUTPUT_TYPE=AUDIO&AUDIO=WAVE&LOCALE=en_US\
-                    &VOICE=cmu-slt-hsmm\
-                    &effect_Volume_selected=on&effect_Volume_parameters=amount%3A0.05%3B\
-                    &effect_Rate_selected=on&effect_Rate_parameters=durScale%3A3.0%3B\
-                    &INPUT_TEXT={}!", msg)).spawn() {
+                if let Ok(mut tts_process) = Command::new("mimic")
+                    .arg("--setf")
+                    .arg("int_f0_target_mean=145") // higher
+                    .arg("--setf")
+                    .arg("duration_stretch=0.5") // faster
+                    .arg("-t")
+                    .arg(&msg).spawn() {
                     if let Err(error) = tts_process.wait() {
-                        TsApi::static_log_or_print(format!("Can't wait for espeak process because {}", error), "TTSPlugin", LogLevel::Error);
+                        TsApi::static_log_or_print(format!("Can't wait for tts process because {}", error), "TTSPlugin", LogLevel::Error);
                     }
                 } else {
                     TsApi::static_log_or_print(format!("Couldn't read '{}'", msg), "TTSPlugin", LogLevel::Error);
