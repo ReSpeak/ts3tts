@@ -1,6 +1,6 @@
 [package]
 name = "ts3tts"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Flakebi <flakebi@t-online.de>"]
 description = "TeamSpeak3 Text to Speech Plugin"
 repository = "https://github.com/Flakebi/ts3tts"
@@ -15,5 +15,4 @@ crate-type = ["cdylib"]
 lto = true
 
 [dependencies]
-ts3plugin = { path = "../ts3plugin" }
-#ts3plugin = "*"
+ts3plugin = "0.3"

@@ -97,7 +97,7 @@ impl TTSPlugin {
                     .arg("--setf")
                     .arg("int_f0_target_mean=145") // higher
                     .arg("--setf")
-                    .arg("duration_stretch=0.5") // faster
+                    .arg("duration_stretch=0.7") // faster
                     .arg("-t")
                     .arg(&msg).spawn() {
                     if let Err(error) = tts_process.wait() {
@@ -461,11 +461,11 @@ impl Plugin for TTSPlugin {
             if message.is_empty() { String::new() } else { format!(" because {}", message) }));
     }
 
-    fn avatar_changed(&mut self, _: &TsApi, _: &Server,
+    /*fn avatar_changed(&mut self, _: &TsApi, _: &Server,
         connection: &Connection, path: Option<String>) {
         self.tts(format!("{} {} his avatar", get_connection_name(connection),
             if path.is_none() { "removed" } else { "changed" }));
-    }
+    }*/
 
     // Called at each channel switch
     /*fn connection_channel_group_changed(&mut self, api: &TsApi, server_id: ServerId,
